@@ -8,6 +8,9 @@ from sklearn.model_selection import cross_validate
 from sklearn.pipeline import make_pipeline
 from sklearn.svm import SVC
 from sklearn.preprocessing import StandardScaler
+from keras.utils.np_utils import to_categorical  
+from sklearn.metrics import classification_report
+import tensorflow as tf 
 import matplotlib.pyplot as plt
 
 plt.style.use('ggplot')
@@ -104,3 +107,62 @@ def plot_cv_scores(cv_scores):
     return
 
 
+def plot_history(history):
+
+    plt.plot(history.history['accuracy'])
+    plt.plot(history.history['val_accuracy'])
+    plt.xlabel("Epochs")
+    plt.legend(['Train Accuracy', 'Val Accuracy'])
+
+    return None
+
+
+def model_training_cnn(X, y):
+
+    # To categorical
+    y = to_categorical(y, num_classes=2)
+
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+
+    input_shape=(6, 6, 1)
+    num_classes = 2
+
+    model = tf.keras.Sequential(
+        [
+            tf.keras.Input(shape=input_shape),
+            tf.keras.layers.Conv2D(32, kernel_size=(3, 3), activation="relu"),
+            tf.keras.layers.MaxPooling2D(pool_size=(3, 3)),
+            #tf.keras.layers.Conv2D(64, kernel_size=(3, 3), activation="relu"),
+            #tf.keras.layers.MaxPooling2D(pool_size=(3, 3)),
+            tf.keras.layers.Flatten(),
+            tf.keras.layers.Dense(128, activation='relu'),
+            tf.keras.layers.Dense(num_classes, activation="softmax"),
+        ]
+    )
+
+    print (model.summary())
+
+    model.compile(loss='categorical_crossentropy', optimizer="adam", metrics=["accuracy"])
+
+
+    callbacks = [
+    tf.keras.callbacks.ModelCheckpoint(
+        'models/model.hdf5',
+        save_best_only=True,  # Only save a model if `val_loss` has improved.
+        monitor="val_loss",
+        verbose=1,
+        save_format='h5',
+    )
+]
+    history = model.fit(
+        X_train, y_train, epochs=50, batch_size=64, callbacks=callbacks, validation_split=0.3
+    )
+
+    # Validation on test set
+    y_pred_proba = model.predict(X_test)[:, 1]
+    y_pred = (y_pred_proba>0.5).astype(int)
+    y_true = y_test[:, 1]
+    
+    print (classification_report(y_true, y_pred))
+
+    return history

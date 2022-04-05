@@ -1,0 +1,8 @@
+name: project
+dependencies:
+- matplotlib
+- numpy
+- pandas
+- pip:
+  - tensorflow
+  - jupyterlab
