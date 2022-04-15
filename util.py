@@ -72,7 +72,7 @@ def relief_algorithm(features_df, y):
 
 def  model_training_random_forest(X, y):
 
-    X_train, X_test, y_train, y_test = train_test_split(X.values, y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     model = RandomForestClassifier(n_estimators=100, random_state=0,  n_jobs=-1)
     #model.fit(X_train, y_train)
 
@@ -85,7 +85,7 @@ def  model_training_random_forest(X, y):
 
 def model_training_svm(X, y):
 
-    X_train, X_test, y_train, y_test = train_test_split(X.values, y, test_size=0.3, random_state=42)
+    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
     model = make_pipeline(StandardScaler(), SVC(gamma='auto'))
     #model.fit(X_train, y_train)
 
@@ -98,11 +98,19 @@ def model_training_svm(X, y):
 
 def plot_cv_scores(cv_scores):
 
+    plt.figure()
     plt.plot(cv_scores['test_accuracy'], 'o-')
     plt.plot(cv_scores['test_recall'], 'o-')
     plt.plot(cv_scores['test_f1'], 'o-')
     plt.xlabel('K-fold CV Set')
-    plt.legend(['Accuracy', 'Recall', 'F1 Score'])
+    plt.legend(['Test Accuracy', 'Test Recall', 'Test F1 Score'])
+
+    plt.figure()
+    plt.plot(cv_scores['train_accuracy'], 'o-')
+    plt.plot(cv_scores['train_recall'], 'o-')
+    plt.plot(cv_scores['train_f1'], 'o-')
+    plt.xlabel('K-fold CV Set')
+    plt.legend(['TrainAccuracy', 'Train Recall', 'Train F1 Score'])
 
     return
 
@@ -166,3 +174,17 @@ def model_training_cnn(X, y):
     print (classification_report(y_true, y_pred))
 
     return history
+
+
+
+def get_intermediate_layer_output(X):
+
+    model = tf.keras.models.load_model('models/model.hdf5')
+
+    aux_model = tf.keras.Model(inputs=model.inputs,
+                           outputs=model.outputs + [model.layers[3].output])
+
+    # Access both the final and intermediate output of the original model
+    final_output, X_embedding = aux_model.predict(X)
+
+    return X_embedding
