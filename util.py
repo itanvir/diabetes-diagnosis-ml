@@ -12,15 +12,61 @@ from keras.utils.np_utils import to_categorical
 from sklearn.metrics import classification_report
 import tensorflow as tf 
 import matplotlib.pyplot as plt
-from IPython.display import display
-import seaborn as sns
-import scipy as sp
 from imblearn.over_sampling import SMOTE
 
 plt.style.use('ggplot')
 
-def generate_training_data():
-    df = pd.read_csv("dataset_diabetes/diabetic_data.csv")
+def read_diabetes_data():
+
+    diabetes_df = pd.read_csv("dataset_diabetes/diabetic_data.csv")
+
+    return diabetes_df
+
+
+def generate_training_data(test_split_ratio = 0.3):
+    """
+    Generate training and test data without domain knowledge
+
+    Return: X_train, X_test, y_train, y_test 
+    """   
+    df = read_diabetes_data()
+
+    # columns with PII
+    df = df.drop(['encounter_id', 'patient_nbr', 'payer_code'], axis = 1)
+
+    # Encode categorical labels
+    le_features = ['race', 'gender', 'age', 'weight', 'medical_specialty',
+       'diag_1',
+       'diag_2', 'diag_3', 'max_glu_serum', 'A1Cresult',
+       'metformin', 'repaglinide', 'nateglinide', 'chlorpropamide',
+       'glimepiride', 'acetohexamide', 'glipizide', 'glyburide', 'tolbutamide',
+       'pioglitazone', 'rosiglitazone', 'acarbose', 'miglitol', 'troglitazone',
+       'tolazamide', 'examide', 'citoglipton', 'insulin',
+       'glyburide-metformin', 'glipizide-metformin',
+       'glimepiride-pioglitazone', 'metformin-rosiglitazone',
+       'metformin-pioglitazone', 'change', 'diabetesMed']
+    le = preprocessing.LabelEncoder()
+    df[le_features] = df[le_features].apply(le.fit_transform)
+
+    X = df.drop(['readmitted'], axis=1)
+    y = (df['readmitted'] != 'NO').astype(int)
+    top_features = relief_algorithm(X, y, n_features = 36)
+    X = X[top_features[:36]]
+    print("The shape of data: ", X.shape)
+    print(X.columns)
+
+    X_train, X_test, y_train, y_test = train_test_split(X.values, y.values, test_size=test_split_ratio, random_state=42)
+    
+    return X_train, X_test, y_train, y_test
+
+
+def generate_training_data_with_feature_engineering(test_split_ratio = 0.3):
+    """
+    Generate training and test data based on domain knowledge.
+
+    Return: X_train, X_test, y_train, y_test 
+    """
+    df = read_diabetes_data()
 
     # columns with PII
     df = df.drop(['encounter_id', 'patient_nbr', 'payer_code'], axis = 1)
@@ -38,7 +84,6 @@ def generate_training_data():
     drop_Idx = drop_Idx.union(set(df['gender'][df['gender'] == 'Unknown/Invalid'].index))
     new_Idx = list(set(df.index) - set(drop_Idx))
     df = df.iloc[new_Idx]
-    print("After removing rows and columns: ", df.shape)
 
     # Subjective and non-unique feature engineering, depending on knowledge of health care services.
     # Customized based on https://www.kaggle.com/code/iabhishekofficial/prediction-on-hospital-readmission
@@ -144,7 +189,8 @@ def generate_training_data():
          'A1Cresult', 'change', 'diabetesMed']
     df[features] = df[features].astype('int64')
 
-    # Interaction features; improve F1 by 0.08
+    # Interaction features
+    # Improve F1 by 0.08
     interactionterms = [('num_medications','time_in_hospital'),
     ('num_medications','num_procedures'),
     ('time_in_hospital','num_lab_procedures'),
@@ -164,7 +210,6 @@ def generate_training_data():
     race_feature = pd.get_dummies(df_pd['race'])
     df_pd = pd.concat([df_pd, race_feature], axis=1)      
     df_pd = df_pd.drop(['race'], axis=1)
-    print(df_pd.columns)
 
     # Manually selected features; relief_algorithm func returns error. 
     selected_features = ['age', 'time_in_hospital', 'num_procedures', 'num_medications', 'number_outpatient', 
@@ -182,101 +227,68 @@ def generate_training_data():
                  'diag_5.0','diag_6.0', 'diag_7.0', 'diag_8.0']
 
     X, y = df_pd[selected_features], df_pd['readmitted']
-    # Oversampling due to imbalanced prediction label. Only ~12% of data have label of 1.
+    print("The shape of preprocessed data: ", X.shape)
+    print(X.columns)
+    
+    # Oversampling due to imbalanced prediction label. Only ~12% of data have positive label.
     sm = SMOTE(random_state=20)
-    X_new, y_new = sm.fit_resample(X.values, y)
-    X_train, X_test, y_train, y_test = train_test_split(X_new, y_new, test_size=0.3, random_state=42)
-     
+    X_new, y_new = sm.fit_sample(X.values, y.values)
+    X_train, X_test, y_train, y_test = train_test_split(X_new, y_new, test_size=test_split_ratio, random_state=42)
+    
     return X_train, X_test, y_train, y_test
 
 
-def create_target(diabetes_df):
-
-    y = (diabetes_df['readmitted'] != 'NO').astype(int).values
-
-    return y
-
-
-def relief_algorithm(features_df, y):
-
-    data = features_df.values
+def relief_algorithm(features_df, y, n_features):
     
-    fs = ReliefF(n_neighbors=5, n_features_to_keep=36)
-    X_relieff = fs.fit_transform(data, y)
+    fs = ReliefF(n_neighbors=5, n_features_to_keep=n_features)
+    X_relieff = fs.fit_transform(features_df.values, y.values)
     top_features = features_df.columns[fs.top_features]
 
     return top_features
 
 
-def model_training_random_forest(X_train, y_train, X_test, y_test):
+def model_training_random_forest(X_train, y_train, X_test, y_test, k_fold=5):
 
-    model = RandomForestClassifier(n_estimators=100, random_state=0,  n_jobs=-1)
+    model = RandomForestClassifier(n_estimators=100, random_state=0, n_jobs=-1)
 
     scoring = ['accuracy', 'recall', 'f1']
-    cv_scores = cross_validate(model, X_train, y_train, cv=5,
-                            scoring=scoring, return_train_score=True, n_jobs=-1)
-
+    cv_scores = cross_validate(model, X_train, y_train, cv=k_fold,
+                            scoring=scoring, return_train_score=False,
+                            return_estimator=True, n_jobs=-1)
+    
     # Validation on test set
-    model2 = RandomForestClassifier(n_estimators=100, random_state=0,  n_jobs=-1)
-    model2.fit(X_train, y_train)
-    y_pred_proba = model2.predict(X_test)
+    y_pred_proba = cv_scores['estimator'][0].predict(X_test)
     y_pred = (y_pred_proba>0.5).astype(int)
-    y_true = y_test
-    print("RF")
-    print(np.sum(y_true == y_pred) / y_pred.shape[0])
-    print (classification_report(y_true, y_pred))
+    print("Random Forest Test Set Metrics")
+    print (classification_report(y_test, y_pred))
 
     return cv_scores
 
 
-def model_training_svm(X_train, y_train, X_test, y_test, n_fold = 5):
+def model_training_svm(X_train, y_train, X_test, y_test, k_fold=5):
 
-    model = SVC(gamma='auto')
+    model = make_pipeline(StandardScaler(), SVC(gamma='auto'))
 
     scoring = ['accuracy', 'recall', 'f1']
-    cv_scores = cross_validate(model, X_train, y_train, cv=n_fold,
-                            scoring=scoring, return_train_score=True, n_jobs=-1)
+    cv_scores = cross_validate(model, X_train, y_train, cv=k_fold,
+                            scoring=scoring, return_train_score=False,
+                            return_estimator=True, n_jobs=-1)
 
     # Validation on test set
-    model2 = SVC(gamma='auto')
-    model2.fit(X_train, y_train)
-    y_pred_proba = model2.predict(X_test)
+    y_pred_proba = cv_scores['estimator'][0].predict(X_test)
     y_pred = (y_pred_proba>0.5).astype(int)
-    y_true = y_test
-    print("SVM")
-    print(np.sum(y_true == y_pred) / y_pred.shape[0])
-    print (classification_report(y_true, y_pred))
+    print("SVM Test Set Metrics")
+    print (classification_report(y_test, y_pred))
 
     return cv_scores
 
 
-def plot_cv_scores(cv_scores):
+def model_training_cnn(X_train, y_train, X_test, y_test, model_checkpoint_path, shape, n_epochs=150, batch_size=64, validation_split_ratio=0.3):
 
-    plt.plot(cv_scores['test_accuracy'], 'o-')
-    plt.plot(cv_scores['test_recall'], 'o-')
-    plt.plot(cv_scores['test_f1'], 'o-')
-    plt.xlabel('K-fold CV Set')
-    plt.legend(['Accuracy', 'Recall', 'F1 Score'])
-
-    return
-
-
-def plot_history(history):
-
-    plt.plot(history.history['accuracy'])
-    plt.plot(history.history['val_accuracy'])
-    plt.xlabel("Epochs")
-    plt.legend(['Train Accuracy', 'Val Accuracy'])
-
-    return None
-
-
-def model_training_cnn(X, y, X_test, y_test):
-
-    X = X.astype('long').reshape(-1, 7, 8)
+    X_train = X_train.astype('long').reshape(-1, shape[0], shape[1])
     # To categorical
-    y = to_categorical(y, num_classes=2)
-    input_shape=(7, 8, 1)
+    y_train = to_categorical(y_train, num_classes=2)
+    input_shape=(shape[0], shape[1], 1)
     num_classes = 2
 
     model = tf.keras.Sequential(
@@ -284,54 +296,88 @@ def model_training_cnn(X, y, X_test, y_test):
             tf.keras.Input(shape=input_shape),
             tf.keras.layers.Conv2D(32, kernel_size=(3, 3), strides=(1, 1), padding="same", activation="relu"),
             tf.keras.layers.MaxPooling2D(pool_size=(3, 3), strides=(2, 2), padding="same"),
-            # 4x 4
             tf.keras.layers.Conv2D(64, kernel_size=(3, 3), strides=(1, 1), padding="same", activation="relu"),
             tf.keras.layers.MaxPooling2D(pool_size=(3, 3), strides=(2, 2), padding="same"),
-            # 2 x 2
             tf.keras.layers.Flatten(),
             tf.keras.layers.Dense(128, activation='relu'),
             tf.keras.layers.Dense(64, activation='relu'),
             tf.keras.layers.Dense(num_classes, activation="softmax"),
         ]
     )
-
+    
     print (model.summary())
-
+    
     model.compile(loss='categorical_crossentropy', optimizer="adam", metrics=["accuracy"])
-
+    
     callbacks = [
         tf.keras.callbacks.ModelCheckpoint(
-            'models/model.hdf5',
+            model_checkpoint_path,
             save_best_only=True,  # Only save a model if `val_loss` has improved.
             monitor="val_loss",
             verbose=1,
             save_format='h5',
         )
     ]
+
     history = model.fit(
-        X, y, epochs=100, batch_size=64, callbacks=callbacks, validation_split=0.3
+        X_train, y_train, epochs=n_epochs, batch_size=batch_size, callbacks=callbacks, validation_split=validation_split_ratio
     )
 
     # Validation on test set
-    X_test = X_test.astype('long').reshape(-1, 7, 8) #101766
-    y_test = to_categorical(y_test, num_classes=2)
+    X_test = X_test.astype('long').reshape(-1, shape[0], shape[1])
     y_pred_proba = model.predict(X_test)[:, 1]
     y_pred = (y_pred_proba>0.5).astype(int)
-    y_true = y_test[:, 1]
-    
-    print (classification_report(y_true, y_pred))
+    print("CNN Test Set Metrics")
+    print (classification_report(y_test, y_pred))
 
     return history
 
 
-def get_intermediate_layer_output(X):
+def plot_cv_scores(cv_scores, model_type):
 
-    model = tf.keras.models.load_model('models/model.hdf5')
+    plt.figure()
+    plt.plot(cv_scores['test_accuracy'], 'o-')
+    plt.plot(cv_scores['test_recall'], 'o-')
+    plt.plot(cv_scores['test_f1'], 'o-')
+    plt.xlabel('K-fold CV Set')
+    plt.legend(['Accuracy', 'Recall', 'F1 Score'])
+    plt.title(model_type)
+    plt.savefig(model_type + " Cross Validation")
+
+    return
+
+
+def plot_history(history):
+
+    plt.figure()
+    plt.plot(history.history['accuracy'])
+    plt.plot(history.history['val_accuracy'])
+    plt.title('CNN Accuracy')
+    plt.xlabel("Epochs")
+    plt.legend(['Train Accuracy', 'Val Accuracy'])
+    plt.savefig("CNN Accuracy")
+    
+    plt.figure()
+    plt.plot(history.history['loss'])
+    plt.plot(history.history['val_loss'])
+    plt.title('CNN Loss')
+    plt.xlabel('Epochs')
+    plt.legend(['Train Loss', 'Val Loss'])
+    plt.savefig("CNN Loss")
+
+    return
+
+
+def get_intermediate_layer_output(X, model_path, shape):
+
+    model = tf.keras.models.load_model(model_path)
 
     aux_model = tf.keras.Model(inputs=model.inputs,
-                           outputs=model.outputs + [model.layers[6].output])
+                           outputs=model.outputs + [model.layers[5].output])
 
     # Access both the final and intermediate output of the original model
+    X = X.astype('long').reshape(-1, shape[0], shape[1])
     final_output, X_embedding = aux_model.predict(X)
+    print(X_embedding.shape)
 
     return X_embedding
